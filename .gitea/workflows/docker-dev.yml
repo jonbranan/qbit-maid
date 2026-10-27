@@ -40,4 +40,4 @@ jobs:
           # Set the KOMODO_STACK_DEV repository variable to your dev stack name.
           # When it is empty the deploy step is skipped, so dev builds still pass.
           KOMODO_TARGET: '${{ vars.KOMODO_STACK_DEV }}'
-        run: ./.gitea/scripts/komodo-deploy.sh
+        run: sh ./.gitea/scripts/komodo-deploy.sh

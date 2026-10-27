@@ -39,4 +39,4 @@ jobs:
           KOMODO_API_SECRET: '${{ secrets.KOMODO_API_SECRET }}'
           KOMODO_TARGET: 'qbit-maid'
           KOMODO_REQUIRED: 'true'
-        run: ./.gitea/scripts/komodo-deploy.sh
+        run: sh ./.gitea/scripts/komodo-deploy.sh
