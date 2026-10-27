@@ -34,9 +34,20 @@ if [ -z "${KOMODO_TARGET:-}" ]; then
   exit 0
 fi
 
-: "${KOMODO_URL:?KOMODO_URL is required}"
-: "${KOMODO_API_KEY:?KOMODO_API_KEY is required}"
-: "${KOMODO_API_SECRET:?KOMODO_API_SECRET is required}"
+# Explicit checks rather than ':?', whose exit status differs between
+# shells (bash exits 1, dash exits 2). Keep every failure path at exit 1.
+if [ -z "${KOMODO_URL:-}" ]; then
+  echo "::error::KOMODO_URL is required" >&2
+  exit 1
+fi
+if [ -z "${KOMODO_API_KEY:-}" ]; then
+  echo "::error::KOMODO_API_KEY is required" >&2
+  exit 1
+fi
+if [ -z "${KOMODO_API_SECRET:-}" ]; then
+  echo "::error::KOMODO_API_SECRET is required" >&2
+  exit 1
+fi
 
 # Normalise: strip any trailing slash so path joins are predictable.
 KOMODO_URL="${KOMODO_URL%/}"
