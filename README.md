@@ -52,6 +52,9 @@ password = "pass"
 use_log = true
 log_level = "INFO"
 log_path = "./qc.log"
+# Optional: log rotation (defaults shown)
+log_max_bytes = 5000000
+log_backup_count = 3
 
 [app_tags]
 protected_tag = "ipt"
@@ -97,4 +100,22 @@ save = "save"
 [healthcheck]
 use_healthcheck = false
 healthcheck_url = "https://example.com/ping/<uuid>>"
+```
+
+## Logging
+
+qbit-maid uses a named logger (`qbit-maid`) that writes to both the configured
+log file and the console (useful for Docker/cron output).
+
+- `use_log` — enable or disable logging entirely.
+- `log_level` — one of `DEBUG`, `INFO`, `WARN`, `ERROR`, `CRITICAL`.
+- `log_path` — path to the log file.
+- `log_max_bytes` — rotate the log file once it reaches this size (default 5 MB).
+- `log_backup_count` — number of rotated backups to keep (default 3).
+
+Log lines include the timestamp, level, logger name, function, and line number,
+for example:
+
+```
+10/26/2026 10:10:00 PM [INFO] qbit-maid:tor_processor:24 - Submitted ["My Torrent..."] for deletion.
 ```

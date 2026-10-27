@@ -8,6 +8,9 @@ password = "pass"
 use_log = true
 log_level = "INFO"
 log_path = "./qc.log"
+# Optional: log rotation (defaults shown)
+log_max_bytes = 5000000
+log_backup_count = 3
 
 [app_tags]
 protected_tag = "ipt" 

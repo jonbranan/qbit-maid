@@ -38,7 +38,6 @@ class Qbt:
             password=self.config["qbittorrent"]["password"],
         )
         # Create the logging and pushover objects
-        self.tl = logging
         self.po = pushover
         self.ct = Counter
         self.cv = csv
@@ -48,6 +47,12 @@ class Qbt:
         self.use_log = self.config["logging"]["use_log"]
         self.log_path = self.config["logging"]["log_path"]
         self.log_level = self.config["logging"]["log_level"]
+        self.log_max_bytes = self.config["logging"].get("log_max_bytes", 5_000_000)
+        self.log_backup_count = self.config["logging"].get("log_backup_count", 3)
+        self.tl = setup_logging(
+            self.use_log, self.log_path, self.log_level,
+            self.log_max_bytes, self.log_backup_count,
+        )
 
         #app_tags
         self.tracker_protected_tag = self.config["app_tags"]["protected_tag"]
@@ -91,7 +96,6 @@ class Qbt:
         self.healthcheck_url = self.config["healthcheck"]["healthcheck_url"]
 
         # Calling log and notify functions
-        tor_log(self)
         tor_notify(self)
         self.t = time
 
@@ -105,8 +109,7 @@ class Qbt:
         self.preme_tor_counter = 0
         self.ignored_counter = 0
         self.torrent_hash_delete_list = []
-        if self.use_log:
-            self.tl.debug(self.tracker_whitelist)
+        self.tl.debug(self.tracker_whitelist)
         #logging in
         try:
             self.tl.info('Connecting to host.')
@@ -118,17 +121,14 @@ class Qbt:
         # Pulling all torrent data
         self.torrent_list = self.qbt_client.torrents_info()
         #Main process block
-        if self.use_log:
-            list_qbit_api_info(self)
-            list_first_tor(self)
-            debug_torrent_list(self)
+        list_qbit_api_info(self)
+        list_first_tor(self)
+        debug_torrent_list(self)
         build_tor_list(self)
         process_counts(self)
-        if self.use_log:
-            torrent_count(self)
+        torrent_count(self)
         tor_processor(self)
-        if self.use_log:
-            print_processor(self)
+        print_processor(self)
         if self.delete_torrents:
             tor_delete(self)
         self.et = datetime.datetime.now()
