@@ -23,8 +23,19 @@ delete_torrents = false
 
 [pushover]
 use_pushover = false
-po_key = "<key>>"
-po_token = "<token>>"
+po_key = "<key>"
+po_token = "<token>"
+# Notification formatting
+# format: "plain" (aligned text) or "html" (bold labels, Pushover HTML)
+format = "plain"
+use_emoji = false
+include_hostname = false
+notify_on_empty = true
+# Optional: -2..2. Priority 2 also needs retry/expire (defaults shown).
+# priority = 0
+# sound = "pushover"
+# retry = 60
+# expire = 3600
 
 [apprise]
 use_apprise = false

@@ -67,8 +67,19 @@ delete_torrents = false
 
 [pushover]
 use_pushover = false
-po_key = "<key>>"
-po_token = "<token>>"
+po_key = "<key>"
+po_token = "<token>"
+# Notification formatting
+# format: "plain" (aligned text) or "html" (bold labels, Pushover HTML)
+format = "plain"
+use_emoji = false
+include_hostname = false
+notify_on_empty = true
+# Optional: -2..2. Priority 2 also needs retry/expire (defaults shown).
+# priority = 0
+# sound = "pushover"
+# retry = 60
+# expire = 3600
 
 [apprise]
 use_apprise = false
@@ -119,3 +130,50 @@ for example:
 ```
 10/26/2026 10:10:00 PM [INFO] qbit-maid:tor_processor:24 - Submitted ["My Torrent..."] for deletion.
 ```
+
+## Notifications
+
+Pushover and Apprise share one summary builder, so both report the same
+numbers. The title states the outcome, the body gives the scanned total, the
+actionable counters, then the tracker split.
+
+`format = "plain"` (default) produces aligned text:
+
+```
+qbit-maid: 7 torrents removed
+
+Scanned 42 torrents in 12s
+
+Removed          7
+Orphaned         4
+Ignored          5
+Premature        3
+
+Protected       10
+Non-protected   20
+```
+
+`format = "html"` bolds the labels and counts using Pushover's HTML subset
+(`html=1` is set automatically). Apprise has no HTML support, so it always
+receives the plain body.
+
+Setting `use_emoji = true` switches both styles to `emoji label: value` rows:
+
+```
+🗑️ Removed: 7
+👻 Orphaned: 4
+⏭️ Ignored: 5
+🐣 Premature: 3
+```
+
+Other options:
+
+- `include_hostname` — add a `Host:` line, useful when several instances notify
+  the same device.
+- `notify_on_empty` — set to `false` to skip the push when nothing was removed
+  or orphaned.
+- `priority` / `sound` — passed through to Pushover. Priority `2` automatically
+  adds `retry` and `expire`.
+
+When `delete_torrents = false` the summary says `Would remove` instead of
+`Removed`, so a dry run is never mistaken for a real one.
