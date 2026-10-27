@@ -1,14 +1,6 @@
-def tor_log(self):
-    """Setting up the log file, if self.use_log is set to true and self.loglevel is DEBUG OR INFO"""
-    if self.use_log:
-        if self.log_level.lower() == 'debug':
-            self.tl.basicConfig(filename=self.log_path, format='%(asctime)s:%(levelname)s:%(message)s', encoding='utf-8', datefmt='%m/%d/%Y %I:%M:%S %p',level=self.tl.DEBUG)
-        elif self.log_level.lower() == 'info':
-            self.tl.basicConfig(filename=self.log_path, format='%(asctime)s:%(levelname)s:%(message)s', encoding='utf-8', datefmt='%m/%d/%Y %I:%M:%S %p',level=self.tl.INFO)
-        elif self.log_level.lower() == 'warn':
-            self.tl.basicConfig(filename=self.log_path, format='%(asctime)s:%(levelname)s:%(message)s', encoding='utf-8', datefmt='%m/%d/%Y %I:%M:%S %p',level=self.tl.WARN)
-        elif self.log_level.lower() == 'error':
-            self.tl.basicConfig(filename=self.log_path, format='%(asctime)s:%(levelname)s:%(message)s', encoding='utf-8', datefmt='%m/%d/%Y %I:%M:%S %p',level=self.tl.ERROR)
+import logging
+from logging.handlers import RotatingFileHandler
+
 
 def tor_notify(self):
     """Seting up to use pushover, if self.use_pushover is set to true and 
@@ -79,8 +71,7 @@ def torrent_count(self):
 
 def get_script_runtime(self):
     elapsed_time = self.et - self.st
-    if self.use_log:
-        self.tl.info(f'Execution time: [{elapsed_time}]')
+    self.tl.info(f'Execution time: [{elapsed_time}]')
     if self.use_pushover:
         self.extm = f"Execution time: [{elapsed_time}]"
     if self.use_apprise:
@@ -94,3 +85,86 @@ def send_ping(self, req_obj, healthcheck_url):
 
 def debug_torrent_list(self):
     self.tl.debug(self.torrent_list)
+
+
+# ---------------------------------------------------------------------------
+# New logging infrastructure (Phase 1 & 3)
+# ---------------------------------------------------------------------------
+LOGGER_NAME = "qbit-maid"
+DEFAULT_MAX_BYTES = 5_000_000
+DEFAULT_BACKUP_COUNT = 3
+
+
+def setup_logging(use_log: bool, log_path: str, log_level: str,
+                  max_bytes: int = DEFAULT_MAX_BYTES,
+                  backup_count: int = DEFAULT_BACKUP_COUNT) -> logging.Logger:
+    """Configure and return the qbit-maid logger.
+
+    Args:
+        use_log: If False, adds a NullHandler and sets level to CRITICAL.
+        log_path: Path to the log file.
+        log_level: One of debug, info, warn, warning, error, critical.
+        max_bytes: Max size of a log file before rotation (default 5 MB).
+        backup_count: Number of rotated backups to keep (default 3).
+
+    Returns:
+        A configured :class:`logging.Logger` named ``"qbit-maid"``.
+    """
+    logger = logging.getLogger(LOGGER_NAME)
+
+    # Make setup idempotent: clear any handlers from a previous call
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+
+    if not use_log:
+        logger.addHandler(logging.NullHandler())
+        logger.setLevel(logging.CRITICAL)
+        return logger
+
+    level_map = {
+        "debug": logging.DEBUG,
+        "info": logging.INFO,
+        "warn": logging.WARNING,
+        "warning": logging.WARNING,
+        "error": logging.ERROR,
+        "critical": logging.CRITICAL,
+    }
+    level = level_map.get(log_level.lower(), logging.INFO)
+    logger.setLevel(level)
+
+    formatter = logging.Formatter(
+        fmt="%(asctime)s [%(levelname)s] %(name)s:%(funcName)s:%(lineno)d - %(message)s",
+        datefmt="%m/%d/%Y %I:%M:%S %p",
+    )
+
+    # File handler with rotation
+    file_handler = RotatingFileHandler(
+        log_path, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8"
+    )
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    # Console handler for Docker / cron visibility
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    return logger
+
+
+def log_torrent(logger: logging.Logger, level: int, torrent: dict, message: str = ""):
+    """Log a torrent record with structured extra fields.
+
+    Args:
+        logger: The qbit-maid logger instance.
+        level: Logging level constant (e.g. ``logging.INFO``).
+        torrent: A dict with torrent fields (hash, name, tracker, tags, etc.).
+        message: Optional human-readable message.
+    """
+    extra = {
+        "torrent_hash": torrent.get("infohash_v1", ""),
+        "torrent_name": (torrent.get("name", "") or "")[:20],
+        "torrent_tracker": torrent.get("tracker", "") or "",
+        "torrent_tags": torrent.get("tags", "") or "",
+    }
+    logger.log(level, message, extra=extra)

@@ -5,37 +5,29 @@ def tor_processor(self):
     for canidate in self.tracker_list:
         if self.enable_telemetry:
             header = ['state','ratio','tags','added','hash','name','tracker']
-            row = [canidate['state'],canidate['ratio'],canidate["tags"],canidate['added_on'],canidate['infohash_v1'],canidate["name"][0:20],canidate['tracker']] 
+            row = [canidate['state'],canidate['ratio'],canidate["tags"],canidate['added_on'],canidate['infohash_v1'],canidate["name"][0:20],canidate['tracker']]
             write_csv(self.cv,self.telemetry_outfile,header,row)
-        if self.use_log:
-            self.tl.debug(f'---Reviewing canidate: ["{canidate["name"][0:20]}..."] {canidate["infohash_v1"]}---')
+        self.tl.debug(f'---Reviewing canidate: ["{canidate["name"][0:20]}..."] {canidate["infohash_v1"]}---')
         if is_downloading(canidate['state']):
-            if self.use_log:
-                self.tl.info(f'["{canidate["name"][0:20]}..."] is still downloading and will be skipped.')
+            self.tl.info(f'["{canidate["name"][0:20]}..."] is still downloading and will be skipped.')
             continue
         elif is_protected_under_ratio(canidate['ratio'], 1.05, self.tracker_protected_tag, canidate["tags"]):
-            if self.use_log:
-                self.tl.debug(f'["{canidate["name"][0:20]}..."] is below a 1.05 ratio({canidate["ratio"]})')
+            self.tl.debug(f'["{canidate["name"][0:20]}..."] is below a 1.05 ratio({canidate["ratio"]})')
             if is_old_tor(canidate['time_active'], self.max_age):
-                if self.use_log:
-                    self.tl.debug(f'["{canidate["name"][0:20]}..."] Seconds old: {canidate["time_active"]} Delta: {canidate["time_active"] - self.max_age}')
+                self.tl.debug(f'["{canidate["name"][0:20]}..."] Seconds old: {canidate["time_active"]} Delta: {canidate["time_active"] - self.max_age}')
                 self.torrent_hash_delete_list.append(canidate['infohash_v1'])
-                if self.use_log:
-                    self.tl.info(f'Submitted ["{canidate["name"][0:20]}..."] for deletion from the protected list.') 
-        elif is_protected_over_ratio(canidate['ratio'], 1.05, self.tracker_protected_tag, canidate["tags"]):
-            if self.use_log:
-                self.tl.debug(f'["{canidate["name"][0:20]}..."] is above a 1.05 ratio({canidate["ratio"]}).')  
-            self.torrent_hash_delete_list.append(canidate['infohash_v1'])
-            if self.use_log:
                 self.tl.info(f'Submitted ["{canidate["name"][0:20]}..."] for deletion from the protected list.')
+        elif is_protected_over_ratio(canidate['ratio'], 1.05, self.tracker_protected_tag, canidate["tags"]):
+            self.tl.debug(f'["{canidate["name"][0:20]}..."] is above a 1.05 ratio({canidate["ratio"]}).')
+            self.torrent_hash_delete_list.append(canidate['infohash_v1'])
+            self.tl.info(f'Submitted ["{canidate["name"][0:20]}..."] for deletion from the protected list.')
         elif is_not_protected_tor(self.tracker_non_protected_tag, canidate["tags"]):
             self.torrent_hash_delete_list.append(canidate['infohash_v1'])
-            if self.use_log:   
-                self.tl.info(f'Submitted ["{canidate["name"][0:20]}..."] for deletion.')
+            self.tl.info(f'Submitted ["{canidate["name"][0:20]}..."] for deletion.')
         else:
             if self.enable_dragnet:
                 header = ['state','ratio','tags','added','thash','tname','trname']
-                row = [canidate['state'],canidate['ratio'],canidate["tags"],canidate['added_on'],canidate['infohash_v1'],canidate["name"][0:20],canidate['tracker']] 
+                row = [canidate['state'],canidate['ratio'],canidate["tags"],canidate['added_on'],canidate['infohash_v1'],canidate["name"][0:20],canidate['tracker']]
                 write_csv(self.cv,self.dragnet_outfile,header,row)
             self.tl.info(f'["{canidate["name"][0:20]}..."] is orphaned.')
             self.up_tor_counter += 1
@@ -46,11 +38,10 @@ def tor_delete_tags(self):
     self.qbt_client.torrents_delete_tags(tag_list)
 
 def tor_delete(self):
-    """Remove torrents, will also delete files, this keeps the filesystem clean. 
+    """Remove torrents, will also delete files, this keeps the filesystem clean.
     Only pass self.torrent_hash_delete_list if you would like to keep the files."""
-    if self.use_log:
-        self.tl.debug('Hash list submitted for deletion:')
-        self.tl.debug(self.torrent_hash_delete_list)
+    self.tl.debug('Hash list submitted for deletion:')
+    self.tl.debug(self.torrent_hash_delete_list)
     if self.torrent_hash_delete_list:
         self.qbt_client.torrents_delete(True, self.torrent_hash_delete_list)
 
