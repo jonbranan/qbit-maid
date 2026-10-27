@@ -1,164 +1,143 @@
-# Plan: Auto-deploy qbit-maid to Komodo from Gitea Actions
+# Auto-deploy qbit-maid to Komodo
 
-Status: **proposal** — no workflow changes made yet.
-Branch: `dev-komodo-deploy`
+Status: **implemented** on branch `dev-komodo-deploy`.
+Komodo instance: `https://k.jonb.io` · Stack: `qbit-maid`
 
-## Goal
+## What this does
 
-When a commit lands on `main` (or a `dev*` branch), the image is built and pushed
-to `git.jonb.io/jblu/qbit-maid`, and then the matching Komodo resource is
-redeployed automatically — with no manual click in the Komodo UI.
+Every successful image build now triggers a Komodo stack deploy:
 
-## Current state
+| Workflow | Trigger | Image tag | Komodo target |
+|---|---|---|---|
+| `.gitea/workflows/docker.yml` | push to `main` | `:latest` | stack `qbit-maid` |
+| `.gitea/workflows/docker-dev.yml` | push to `dev*` | `:dev` | `vars.KOMODO_STACK_DEV` (skipped if unset) |
 
-Two Gitea Actions workflows exist, both build-and-push only:
+The deploy step runs **after** `Build and push`, so the new image is already in
+the registry when Komodo pulls it. If the deploy fails, the workflow goes red.
 
-| File | Trigger | Tag pushed |
-|---|---|---|
-| `.gitea/workflows/docker.yml` | push to `main` | `git.jonb.io/jblu/qbit-maid:latest` |
-| `.gitea/workflows/docker-dev.yml` | push to `dev*` | `git.jonb.io/jblu/qbit-maid:dev` |
+## Why not just use the existing webhook?
 
-Neither workflow talks to Komodo. There are currently **no Komodo references
-anywhere in the repo**, so the Komodo side (stack/deployment resource, registry
-credentials) is assumed to be configured out-of-band in the Komodo UI.
+You already have webhooks configured, and this is the important part: **a push
+webhook on the stack does not reliably deploy new container builds.**
 
-## Design options
+The webhook fires on `git push`. That happens *before* Gitea Actions has built
+and pushed the image — the build takes minutes. So Komodo receives the deploy
+request while the registry still holds the *previous* `:latest`. It pulls that,
+deploys it, and reports success. The new code never lands until something else
+triggers a second deploy.
 
-| # | Approach | Ordering | CI change | Notes |
-|---|---|---|---|---|
-| A | **Gitea Actions step calls Komodo API** (`POST /execute/DeployStack`) | ✅ deploy strictly after image push | small | Needs API key/secret as Gitea secrets; runner must reach Komodo |
-| B | Gitea repo webhook → Komodo `/listener/github/stack/<name>/deploy` | ❌ fires on push, races the image build | none | Komodo may pull the *old* `:latest`; needs `KOMODO_WEBHOOK_SECRET` |
-| C | Komodo **Build** resource builds from the Gitea repo, deploy attached | ✅ | removes CI build | Moves building off Gitea Actions; bigger change |
-| D | Komodo **Auto Update** (poll registry for new `:latest` digest) | ⚠️ up to poll interval late | none | Zero-effort safety net, not "on push" |
+The ordering is the whole problem, and a webhook cannot fix it because the
+webhook is tied to the push event, not the build event.
 
-**Recommendation: A, with D enabled as a backstop.**
+So the workflow calls the Komodo API directly instead:
 
-A gives deterministic ordering — the deploy can only start once the push step has
-succeeded. D costs nothing and catches any deploy that A misses (e.g. a manual
-`docker push`, or a failed API call).
+```
+POST https://k.jonb.io/execute/DeployStack
+x-api-key: <key>
+x-api-secret: <secret>
+{"stack": "qbit-maid"}
+```
 
-B is the tempting "no code" option but it is genuinely racy: the webhook fires on
-`git push`, which is *before* the image exists in the registry. Komodo would
-redeploy the previous `:latest`. Only pick B if you also switch to C.
+This is the same call the Komodo UI makes when you click **Deploy**, just
+triggered from CI at the right moment.
 
-## Implementation
+### What to do with the existing webhook
 
-### 1. Komodo-side prerequisites (manual, in the Komodo UI)
+If you have a stack webhook pointing at
+`/listener/github/stack/qbit-maid/deploy`, it is now redundant and will cause a
+second, useless deploy on every push (deploying the stale image). **Remove it**
+in Gitea → repo Settings → Webhooks.
 
-1. Confirm the resource type and name — a **Stack** (`DeployStack`) or a
-   **Deployment** (`Deploy`). The plan below assumes a Stack named `qbit-maid`.
-2. Make sure the Komodo server can pull from `git.jonb.io`. Add the registry
-   credentials under **Settings → Docker Registries** (or the stack's
-   `docker_account`), otherwise the redeploy will fail on `docker pull`.
-3. Create an API key: **Settings → API Keys → New**. Scope it to a user that has
-   **Execute** permission on the `qbit-maid` stack. Save the key + secret.
-4. Optional backstop: set the stack's update mode to **Auto Update**.
+Keep webhooks only if you later point them at a *Procedure* rather than the
+stack — see "Using a Procedure" below.
 
-### 2. Gitea secrets / variables
+## One Komodo setting to verify
+
+`DeployStack` runs `docker compose pull` before `up` **only when the stack has
+`auto_pull` enabled**. It defaults to `true`, so this is probably already fine —
+but if it has been turned off, deploys will silently reuse the cached image and
+you will see no change.
+
+Check in the Komodo UI: stack `qbit-maid` → Config → **Auto Pull** should be on.
+
+## Setup (one-time)
+
+### 1. Komodo API key
+
+Komodo → **Settings → API Keys → New**. The key's user needs **Execute**
+permission on the `qbit-maid` stack. Copy the key and secret — the secret is
+shown once.
+
+### 2. Gitea secrets
 
 Repo → **Settings → Actions → Secrets**:
 
-| Name | Kind | Value |
-|---|---|---|
-| `KOMODO_URL` | secret | `https://komo.example.com` (no trailing slash) |
-| `KOMODO_API_KEY` | secret | from step 1.3 |
-| `KOMODO_API_SECRET` | secret | from step 1.3 |
-| `KOMODO_STACK` | variable | `qbit-maid` |
+| Name | Value |
+|---|---|
+| `KOMODO_URL` | `https://k.jonb.io` |
+| `KOMODO_API_KEY` | from step 1 |
+| `KOMODO_API_SECRET` | from step 1 |
 
-`KOMODO_STACK` is a *variable*, not a secret — it is not sensitive and being able
-to see it in the UI makes the workflow easier to read.
+### 3. Dev stack (optional)
 
-### 3. Workflow change
+Repo → **Settings → Actions → Variables**:
 
-Append one step to each workflow, after `Build and push`. For `docker.yml`:
+| Name | Value |
+|---|---|
+| `KOMODO_STACK_DEV` | your dev stack name, e.g. `qbit-maid-dev` |
+
+If this variable is unset, the dev workflow logs `KOMODO_TARGET is not set -
+skipping Komodo deploy` and still passes. Dev builds never fail because of a
+missing dev stack.
+
+## The deploy script
+
+`.gitea/scripts/komodo-deploy.sh` is shared by both workflows. It:
+
+1. Skips cleanly if `KOMODO_TARGET` is empty (unless `KOMODO_REQUIRED=true`).
+2. POSTs to `/execute/DeployStack` (or `/execute/RunProcedure`).
+3. Fails on any non-200, printing Komodo's error body.
+4. Polls `/read/GetUpdate` until the update reaches `Complete`, then checks
+   `success` and prints the Komodo log on failure.
+
+The execute endpoint returns immediately with an `Update` object — a `200` means
+"queued", not "deployed". That is why step 4 exists.
+
+Tunable via env: `KOMODO_TARGET_TYPE` (`stack`/`procedure`), `KOMODO_WAIT`
+(default `true`), `KOMODO_WAIT_TIMEOUT` (default 600s), `KOMODO_WAIT_INTERVAL`
+(default 10s).
+
+### Using a Procedure instead of a direct stack deploy
+
+If you later wrap the deploy in a Komodo Procedure (deploy + healthcheck +
+notification, say), point the workflow at it instead of editing the script:
 
 ```yaml
-      -
-        name: Trigger Komodo deploy
-        env:
-          KOMODO_URL: ${{ secrets.KOMODO_URL }}
-          KOMODO_API_KEY: ${{ secrets.KOMODO_API_KEY }}
-          KOMODO_API_SECRET: ${{ secrets.KOMODO_API_SECRET }}
-          KOMODO_STACK: ${{ vars.KOMODO_STACK }}
-        run: |
-          set -euo pipefail
-          response=$(curl -sS -w '\n%{http_code}' \
-            -X POST "${KOMODO_URL}/execute/DeployStack" \
-            -H 'Content-Type: application/json' \
-            -H "x-api-key: ${KOMODO_API_KEY}" \
-            -H "x-api-secret: ${KOMODO_API_SECRET}" \
-            -d "{\"stack\": \"${KOMODO_STACK}\"}")
-          body=$(printf '%s' "$response" | sed '$d')
-          code=$(printf '%s' "$response" | tail -n1)
-          echo "Komodo responded HTTP ${code}"
-          echo "$body"
-          [ "$code" = "200" ] || exit 1
+env:
+  KOMODO_TARGET_TYPE: 'procedure'
+  KOMODO_TARGET: 'qbit-maid deploy'
 ```
 
-`docker-dev.yml` is identical except `KOMODO_STACK` points at the dev stack
-(e.g. `qbit-maid-dev`), so dev pushes never touch production.
+`RunProcedure` takes `{"procedure": "<name>"}` and returns the same `Update`
+shape, so the polling logic is unchanged.
 
-Notes on the API call:
+## Testing
 
-- Endpoint is `POST /execute/DeployStack` with the params object as the body.
-  The equivalent generic form is `POST /execute` with
-  `{"type": "DeployStack", "params": {"stack": "..."}}`.
-- Auth headers are `x-api-key` and `x-api-secret`.
-- `DeployStack` accepts `{"stack": "<id or name>", "services": [], "stop_time": null}`.
-  Use the resource **id** rather than the name if the name is likely to change.
-- **The call returns immediately** with an `Update` object; the deploy runs
-  asynchronously. A `200` means "queued", not "deployed". See step 4.
+Verified locally against a mock of the Komodo API — 12 checks covering the
+success path, deploy failure, bad credentials (401), unknown stack (400),
+empty target skip, required-but-empty target, unreachable host, and the
+procedure target type. All pass.
 
-### 4. Optional: wait for the deploy to actually finish
+Live verification still needed:
 
-If you want the workflow to go red when the deploy fails, poll
-`POST /read/GetUpdate` with `{"update_id": "<id>"}` until `status` is `Complete`,
-then check `success`. Sketch:
+1. Push `dev-komodo-deploy` — it matches `dev*`, so `docker-dev.yml` runs. With
+   `KOMODO_STACK_DEV` unset it will skip the deploy; set the variable first if
+   you want to exercise it.
+2. Merge to `main` and confirm the Komodo UI shows a new `DeployStack` update
+   for `qbit-maid`, operator = the API key's user.
+3. Confirm the running container picked up the new image digest.
 
-```bash
-update_id=$(printf '%s' "$body" | python3 -c 'import sys,json; print(json.load(sys.stdin)["_id"]["$oid"])')
-for _ in $(seq 1 60); do
-  sleep 5
-  u=$(curl -sS -X POST "${KOMODO_URL}/read/GetUpdate" \
-        -H 'Content-Type: application/json' \
-        -H "x-api-key: ${KOMODO_API_KEY}" \
-        -H "x-api-secret: ${KOMODO_API_SECRET}" \
-        -d "{\"update_id\": \"${update_id}\"}")
-  status=$(printf '%s' "$u" | python3 -c 'import sys,json; print(json.load(sys.stdin)["status"])')
-  [ "$status" = "Complete" ] || continue
-  printf '%s' "$u" | python3 -c 'import sys,json; sys.exit(0 if json.load(sys.stdin)["success"] else 1)'
-done
-echo "Timed out waiting for deploy"; exit 1
-```
+## Rollback
 
-Recommendation: ship step 3 first, add step 4 only if you find yourself wanting
-the CI signal. Polling adds up to 5 minutes of runner time per deploy.
-
-### 5. Testing
-
-1. Push `dev-komodo-deploy` — this matches `dev*`, so `docker-dev.yml` runs and
-   exercises the new step against the dev stack. Confirm the Komodo UI shows a
-   new `Deploy` update with operator = your API key's user.
-2. Verify the running container actually picked up the new image
-   (`docker inspect` the image digest, or check the app's log line).
-3. Merge to `main` and confirm the production stack redeploys.
-4. Negative test: temporarily set `KOMODO_API_SECRET` to a bad value and confirm
-   the step fails loudly rather than silently passing.
-
-### 6. Rollback
-
-The change is additive — delete the `Trigger Komodo deploy` step and the
-workflows are back to build-and-push only. No Komodo state is modified by the
-workflow beyond triggering a deploy.
-
-## Open questions
-
-These need answers before the workflow change is written:
-
-1. **Stack or Deployment?** Determines `DeployStack` vs `Deploy`.
-2. **Resource name(s)** for prod and dev.
-3. **Is Komodo reachable from the Gitea runner?** If Komodo is on a private
-   network and the runner is not, option A is out and we fall back to B+C or D.
-4. **Does Komodo already have registry credentials for `git.jonb.io`?** If not,
-   the first automated deploy will fail at pull time.
-5. **Should dev deploys be automatic?** Some people prefer dev to stay manual.
+Delete the `Deploy to Komodo` step from the workflow(s). Nothing on the Komodo
+side is modified by CI beyond triggering a deploy.
