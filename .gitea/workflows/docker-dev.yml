@@ -28,3 +28,16 @@ jobs:
         with:
           push: true
           tags: git.jonb.io/jblu/qbit-maid:dev
+      -
+        name: Checkout
+        uses: actions/checkout@v4
+      -
+        name: Deploy to Komodo
+        env:
+          KOMODO_URL: '${{ secrets.KOMODO_URL }}'
+          KOMODO_API_KEY: '${{ secrets.KOMODO_API_KEY }}'
+          KOMODO_API_SECRET: '${{ secrets.KOMODO_API_SECRET }}'
+          # Set the KOMODO_STACK_DEV repository variable to your dev stack name.
+          # When it is empty the deploy step is skipped, so dev builds still pass.
+          KOMODO_TARGET: '${{ vars.KOMODO_STACK_DEV }}'
+        run: sh ./.gitea/scripts/komodo-deploy.sh

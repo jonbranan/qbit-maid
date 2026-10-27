@@ -28,3 +28,15 @@ jobs:
         with:
           push: true
           tags: git.jonb.io/jblu/qbit-maid:latest
+      -
+        name: Checkout
+        uses: actions/checkout@v4
+      -
+        name: Deploy to Komodo
+        env:
+          KOMODO_URL: '${{ secrets.KOMODO_URL }}'
+          KOMODO_API_KEY: '${{ secrets.KOMODO_API_KEY }}'
+          KOMODO_API_SECRET: '${{ secrets.KOMODO_API_SECRET }}'
+          KOMODO_TARGET: 'qbit-maid'
+          KOMODO_REQUIRED: 'true'
+        run: sh ./.gitea/scripts/komodo-deploy.sh
