@@ -1,4 +1,5 @@
 import logging
+import socket
 from logging.handlers import RotatingFileHandler
 
 
@@ -9,16 +10,14 @@ def tor_notify(self):
         self.poc = self.po.Pushover(self.po_token)
 
 def tor_notify_apprise(self, req_obj, app_obj):
-    """Use apprise"""
-    body = f"   Total: {self.total_torrents}\n\
-    Premature: {self.preme_tor_counter}\n\
-    Ignored: {self.ignored_counter}\n\
-    Protected: {self.c[self.tracker_protected_tag]}\n\
-    Non-protected: {self.c[self.tracker_non_protected_tag]}\n\
-    Orphaned: {self.up_tor_counter}\n\
-    Marked for deletion: {len(self.torrent_hash_delete_list)}\n\
-    {self.extm}"
-    title = "--- qbit-maid summary ---"
+    """Use apprise. Apprise has no HTML support, so always use the plain style."""
+    opts = get_notify_options(self)
+    title, body = build_summary(
+        self,
+        style="plain",
+        use_emoji=opts["use_emoji"],
+        include_hostname=opts["include_hostname"],
+    )
     app_obj(req_obj, self.apprise_host, self.apprise_port, self.apprise_aurls, title, body)
 
 def tornotifytest(self):
@@ -41,15 +40,42 @@ def print_processor(self):
     self.tl.info(f'Marked for deletion: {len(self.torrent_hash_delete_list)}')
 
 def tor_notify_summary(self):
-    """Main notification method when the app is used in an automated fashion"""
-    self.poc.message(self.po_key, f"   Total: {self.total_torrents}\n\
-    Premature: {self.preme_tor_counter}\n\
-    Ignored: {self.ignored_counter}\n\
-    Protected: {self.c[self.tracker_protected_tag]}\n\
-    Non-protected: {self.c[self.tracker_non_protected_tag]}\n\
-    Orphaned: {self.up_tor_counter}\n\
-    Marked for deletion: {len(self.torrent_hash_delete_list)}\n\
-    {self.extm}", title="--- qbit-maid summary ---")
+    """Main notification method when the app is used in an automated fashion.
+
+    Formatting is controlled by the ``[pushover]`` config section: ``format``
+    (plain|html), ``use_emoji``, ``include_hostname``, ``notify_on_empty``,
+    ``priority``, ``sound``, ``retry`` and ``expire``.
+    """
+    logger = _logger(self)
+    opts = get_notify_options(self)
+    title, body = build_summary(
+        self,
+        style=opts["style"],
+        use_emoji=opts["use_emoji"],
+        include_hostname=opts["include_hostname"],
+    )
+
+    if not opts["notify_on_empty"]:
+        stats = summary_stats(self)
+        if not stats["removed"] and not stats["orphaned"]:
+            logger.info("Nothing removed or orphaned, skipping notification.")
+            return
+
+    kwargs = {}
+    if opts["style"] == "html":
+        kwargs["html"] = 1
+    if opts["priority"] is not None:
+        kwargs["priority"] = opts["priority"]
+        if opts["priority"] == 2:
+            kwargs["retry"] = opts["retry"]
+            kwargs["expire"] = opts["expire"]
+    if opts["sound"]:
+        kwargs["sound"] = opts["sound"]
+
+    try:
+        self.poc.message(self.po_key, body, title=title, **kwargs)
+    except Exception as e:  # never let a notification failure abort a run
+        logger.error(f"Failed to send pushover notification: {e}")
 
 def list_first_tor(self, index=0):
     """Only lists the first torrent"""
@@ -77,6 +103,104 @@ def get_script_runtime(self):
     if self.use_apprise:
         self.extm = f"Execution time: [{elapsed_time}]"
 
+# ---------------------------------------------------------------------------
+# Notification formatting
+# ---------------------------------------------------------------------------
+NOTIFY_STYLES = ("plain", "html")
+DEFAULT_NOTIFY_STYLE = "plain"
+LABEL_WIDTH = 14
+VALUE_WIDTH = 4
+
+NOTIFY_EMOJI = {
+    "removed": "\U0001F5D1\uFE0F",
+    "orphaned": "\U0001F47B",
+    "ignored": "\u23ED\uFE0F",
+    "premature": "\U0001F423",
+    "protected": "\U0001F6E1\uFE0F",
+    "non_protected": "\U0001F310",
+}
+
+
+def _logger(self):
+    """Return the configured logger, or a bare one for ad-hoc/test use."""
+    return getattr(self, "tl", logging.getLogger(LOGGER_NAME))
+
+
+def format_runtime(value):
+    """Format a timedelta as ``12s``, ``1m 04s`` or ``1h 02m 03s``."""
+    try:
+        total = int(value.total_seconds())
+    except AttributeError:
+        return str(value)
+    if total < 0:
+        total = 0
+    hours, remainder = divmod(total, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m {seconds:02d}s"
+    if minutes:
+        return f"{minutes}m {seconds:02d}s"
+    return f"{seconds}s"
+
+
+def get_notify_options(self):
+    """Read notification options from ``[pushover]``, falling back to defaults."""
+    config = getattr(self, "config", None) or {}
+    po = config.get("pushover", None) or {}
+    style = str(po.get("format", DEFAULT_NOTIFY_STYLE) or "").lower()
+    if style not in NOTIFY_STYLES:
+        style = DEFAULT_NOTIFY_STYLE
+    priority = po.get("priority")
+    return {
+        "style": style,
+        "use_emoji": bool(po.get("use_emoji", False)),
+        "include_hostname": bool(po.get("include_hostname", False)),
+        "notify_on_empty": bool(po.get("notify_on_empty", True)),
+        "priority": None if priority is None else int(priority),
+        "sound": po.get("sound"),
+        "retry": int(po.get("retry", 60)),
+        "expire": int(po.get("expire", 3600)),
+    }
+
+
+def summary_runtime(self):
+    """Runtime string for the summary, with a fallback to ``self.extm``."""
+    start = getattr(self, "st", None)
+    end = getattr(self, "et", None)
+    if start is not None and end is not None:
+        return format_runtime(end - start)
+    extm = getattr(self, "extm", "") or ""
+    if "[" in extm and "]" in extm:
+        return extm[extm.index("[") + 1:extm.rindex("]")]
+    return "unknown"
+
+
+def summary_stats(self):
+    """Collect the counters shown in a notification summary."""
+    counter = getattr(self, "c", None)
+    protected_tag = getattr(self, "tracker_protected_tag", "") or ""
+    non_protected_tag = getattr(self, "tracker_non_protected_tag", "") or ""
+
+    def tag_count(tag):
+        if counter is None or not tag:
+            return 0
+        try:
+            return counter[tag]
+        except (KeyError, TypeError):
+            return 0
+
+    return {
+        "total": getattr(self, "total_torrents", 0),
+        "removed": len(getattr(self, "torrent_hash_delete_list", None) or []),
+        "orphaned": getattr(self, "up_tor_counter", 0),
+        "ignored": getattr(self, "ignored_counter", 0),
+        "premature": getattr(self, "preme_tor_counter", 0),
+        "protected": tag_count(protected_tag),
+        "non_protected": tag_count(non_protected_tag),
+        "runtime": summary_runtime(self),
+    }
+
+
 def send_ping(self, req_obj, healthcheck_url):
     try:
         req_obj.get(healthcheck_url, timeout=5)
@@ -85,6 +209,82 @@ def send_ping(self, req_obj, healthcheck_url):
 
 def debug_torrent_list(self):
     self.tl.debug(self.torrent_list)
+
+
+def _notify_row(label, value, style, use_emoji, key):
+    """Render one label/value line for the chosen style."""
+    emoji = NOTIFY_EMOJI.get(key, "") if use_emoji else ""
+    if use_emoji:
+        prefix = f"{emoji} " if emoji else ""
+        if style == "html":
+            return f"{prefix}<b>{label}</b>: {value}"
+        return f"{prefix}{label}: {value}"
+    if style == "html":
+        pad = " " * max(LABEL_WIDTH - len(label), 1)
+        return f"<b>{label}</b>{pad}{value:>{VALUE_WIDTH}}"
+    return f"{label:<{LABEL_WIDTH}}{value:>{VALUE_WIDTH}}"
+
+
+def build_summary(self, style=DEFAULT_NOTIFY_STYLE, use_emoji=False,
+                  include_hostname=False):
+    """Build the ``(title, body)`` pair used by every notifier.
+
+    Result-first layout: the title states what happened, the body gives the
+    scanned total, the actionable counters, then the tracker split.
+
+    Args:
+        style: ``"plain"`` for aligned text, ``"html"`` for Pushover HTML.
+        use_emoji: Prefix each row with an emoji marker.
+        include_hostname: Add a ``Host:`` line above the summary.
+
+    Returns:
+        A ``(title, body)`` tuple of strings.
+    """
+    if style not in NOTIFY_STYLES:
+        style = DEFAULT_NOTIFY_STYLE
+
+    stats = summary_stats(self)
+    delete_enabled = bool(getattr(self, "delete_torrents", False))
+
+    # Title: say what happened. Pushover does not render HTML in titles.
+    removed = stats["removed"]
+    noun = "torrent" if removed == 1 else "torrents"
+    if removed:
+        action = "removed" if delete_enabled else "would be removed"
+        title = f"qbit-maid: {removed} {noun} {action}"
+    elif delete_enabled:
+        title = "qbit-maid: nothing removed"
+    else:
+        title = "qbit-maid: nothing to remove"
+
+    lines = []
+    if include_hostname:
+        host = socket.gethostname()
+        if style == "html":
+            lines.append(f"<b>Host:</b> {host}")
+        else:
+            lines.append(f"Host: {host}")
+        lines.append("")
+
+    total = stats["total"]
+    scanned_noun = "torrent" if total == 1 else "torrents"
+    if style == "html":
+        lines.append(f"Scanned <b>{total}</b> {scanned_noun} in <b>{stats['runtime']}</b>")
+    else:
+        lines.append(f"Scanned {total} {scanned_noun} in {stats['runtime']}")
+    lines.append("")
+
+    removed_label = "Removed" if delete_enabled else "Would remove"
+    lines.append(_notify_row(removed_label, removed, style, use_emoji, "removed"))
+    lines.append(_notify_row("Orphaned", stats["orphaned"], style, use_emoji, "orphaned"))
+    lines.append(_notify_row("Ignored", stats["ignored"], style, use_emoji, "ignored"))
+    lines.append(_notify_row("Premature", stats["premature"], style, use_emoji, "premature"))
+    lines.append("")
+    lines.append(_notify_row("Protected", stats["protected"], style, use_emoji, "protected"))
+    lines.append(_notify_row("Non-protected", stats["non_protected"], style,
+                             use_emoji, "non_protected"))
+
+    return title, "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
