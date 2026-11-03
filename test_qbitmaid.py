@@ -1,167 +1,142 @@
 import datetime
-import logging
 import unittest
-from collections import Counter
 
-import requests as r
-from qlist import is_preme,is_cat_ignored,is_tracker_blank,is_protected_tracker,is_not_protected_tracker,is_tag_blank,is_ignored_tag
-from qprocess import is_downloading,is_protected_under_ratio,is_old_tor,is_protected_over_ratio,is_not_protected_tor
+from qbt_fakes import FailingPushover, FakeQbt, StubPushover
+from qlist import (
+    is_cat_ignored,
+    is_ignored_tag,
+    is_not_protected_tracker,
+    is_preme,
+    is_protected_tracker,
+    is_tag_blank,
+    is_tracker_blank,
+)
 from qlogging import (
-    send_ping,
     build_summary,
     format_runtime,
     get_notify_options,
+    send_ping,
     summary_stats,
     tor_notify_apprise,
     tor_notify_summary,
 )
+from qprocess import (
+    is_downloading,
+    is_not_protected_tor,
+    is_old_tor,
+    is_protected_over_ratio,
+    is_protected_under_ratio,
+)
 
 
-class FakeQbt:
-    """Minimal stand-in for the Qbt object, holding only what notifiers read."""
+class RecordingRequests:
+    """Stands in for the requests module without touching the network."""
 
-    def __init__(self, **overrides):
-        self.config = {"pushover": {}}
-        self.total_torrents = 42
-        self.torrent_hash_delete_list = ["a"] * 7
-        self.up_tor_counter = 4
-        self.ignored_counter = 5
-        self.preme_tor_counter = 3
-        self.tracker_protected_tag = "ipt"
-        self.tracker_non_protected_tag = "public"
-        self.c = Counter({"ipt": 10, "public": 20})
-        self.delete_torrents = True
-        self.st = datetime.datetime(2026, 10, 27, 9, 54, 0)
-        self.et = datetime.datetime(2026, 10, 27, 9, 54, 12)
-        self.po_key = "USERKEY"
-        self.poc = StubPushover()
-        self.apprise_host = "localhost"
-        self.apprise_port = 8088
-        self.apprise_aurls = "mailto://user:pass@example.com"
-        self.tl = logging.getLogger("qbit-maid-test")
-        for key, value in overrides.items():
-            setattr(self, key, value)
-
-
-class StubPushover:
-    """Records message() calls instead of hitting the Pushover API."""
+    class RequestException(Exception):
+        pass
 
     def __init__(self):
         self.calls = []
+        self.timeouts = []
 
-    def message(self, user, body, **kwargs):
-        self.calls.append({"user": user, "body": body, "kwargs": kwargs})
+    def get(self, url, timeout=None):
+        self.calls.append(url)
+        self.timeouts.append(timeout)
+        return "ok"
 
 
-class FailingPushover:
-    def message(self, *args, **kwargs):
-        raise RuntimeError("pushover is down")
+class TestPredicates(unittest.TestCase):
+    def test_is_preme(self):
+        self.assertTrue(is_preme(1, 1))  # equal to min_age counts as premature
+        self.assertTrue(is_preme(1, 2))
+        self.assertFalse(is_preme(2, 1))
 
-class TestQbitmaid(unittest.TestCase):
-    def test_ispreme_sanity(self):
-        self.assertTrue(is_preme(1,1))
-        self.assertTrue(is_preme(1,2))
-        self.assertFalse(is_preme(2,1))
-    
-    def test_ispreme(self):
-        pass
+    def test_is_cat_ignored(self):
+        cats = ["a", "b", "c"]
+        for cat in cats:
+            self.assertTrue(is_cat_ignored(cat, cats))
+        self.assertFalse(is_cat_ignored("d", cats))
+        self.assertFalse(is_cat_ignored(1, cats))
+        self.assertFalse(is_cat_ignored(1.0, cats))
 
-    def test_iscatignored_sanity(self):
-        self.assertTrue(is_cat_ignored('a', ['a','b','c']))
-        self.assertTrue(is_cat_ignored('b', ['a','b','c']))
-        self.assertTrue(is_cat_ignored('c', ['a','b','c']))
-        self.assertFalse(is_cat_ignored('d', ['a','b','c']))
-        self.assertFalse(is_cat_ignored(1, ['a','b','d']))
-        self.assertFalse(is_cat_ignored(1.0000000, ['a','b','c']))
-
-    def test_iscatignored(self):
-        pass
-
-    def test_istrackerblank_sanity(self):
-        self.assertTrue(is_tracker_blank(''))
-        self.assertFalse(is_tracker_blank('a'))
+    def test_is_tracker_blank(self):
+        self.assertTrue(is_tracker_blank(""))
+        self.assertFalse(is_tracker_blank("a"))
         self.assertFalse(is_tracker_blank(1))
-        self.assertFalse(is_tracker_blank(1.00000000))
+        self.assertFalse(is_tracker_blank(1.0))
 
-    def test_istrackerblank(self):
-        pass
+    def test_is_protected_tracker(self):
+        whitelist = ["a.com", "b.me", "c.io"]
+        self.assertTrue(is_protected_tracker("https://a.com/", whitelist))
+        self.assertFalse(is_protected_tracker("https://google.com/", whitelist))
+        self.assertFalse(is_protected_tracker("https://d.com", whitelist))
+        self.assertFalse(is_protected_tracker("", whitelist))
 
-    def test_isprotectedtracker_sanity(self):
-        self.assertTrue(is_protected_tracker('https://a.com/',['a.com','b.me','c.io']))
-        self.assertFalse(is_protected_tracker('https://google.com/',['a.com','b.me','c.io']))
-        self.assertFalse(is_protected_tracker('https://d.com',['a.com','b.me','c.io']))
+    def test_is_not_protected_tracker(self):
+        whitelist = ["a.com", "b.me", "c.io"]
+        self.assertFalse(is_not_protected_tracker("https://a.com/", whitelist))
+        self.assertTrue(is_not_protected_tracker("https://google.com/", whitelist))
+        self.assertTrue(is_not_protected_tracker("https://d.com", whitelist))
+        self.assertFalse(is_not_protected_tracker("", whitelist))
 
-    def test_isprotectedtracker(self):
-        pass
+    def test_is_tag_blank(self):
+        self.assertTrue(is_tag_blank(""))
+        for value in ("a", 1, 1.0001, False, True):
+            self.assertFalse(is_tag_blank(value))
 
-    def test_isnotprotectedtracker_sanity(self):
-        self.assertFalse(is_not_protected_tracker('https://a.com/',['a.com','b.me','c.io']))
-        self.assertTrue(is_not_protected_tracker('https://google.com/',['a.com','b.me','c.io']))
-        self.assertTrue(is_not_protected_tracker('https://d.com',['a.com','b.me','c.io']))
+    def test_is_downloading(self):
+        self.assertTrue(is_downloading("downloading"))
+        self.assertFalse(is_downloading("DOWNLOADING"))
+        self.assertFalse(is_downloading("dOwNlOaDiNg"))
+        self.assertFalse(is_downloading("uploading"))
 
-    def test_isnotprotectedtracker(self):
-        pass
+    def test_is_protected_under_ratio(self):
+        self.assertTrue(is_protected_under_ratio(0.5, 1, "a", "a,b,c"))
+        self.assertFalse(is_protected_under_ratio(1.5, 1, "a", "a,b,c"))
+        self.assertFalse(is_protected_under_ratio(0.5, 1, "z", "a,b,c"))
 
-    def test_istagblank(self):
-        self.assertTrue(is_tag_blank(''))
-        self.assertFalse(is_tag_blank('a'))
-        self.assertFalse(is_tag_blank(1))
-        self.assertFalse(is_tag_blank(1.0001))
-        self.assertFalse(is_tag_blank(False))
-        self.assertFalse(is_tag_blank(True))
+    def test_is_old_tor(self):
+        self.assertTrue(is_old_tor(1, 1))
+        self.assertTrue(is_old_tor(2, 1))
+        self.assertFalse(is_old_tor(1, 2))
 
-    def test_isdownloading_sanity(self):
-        self.assertTrue(is_downloading('downloading'))
-    
-    def test_isdownloading(self):
-        self.assertFalse(is_downloading('DOWNLOADING'))
-        self.assertFalse(is_downloading('dOwNlOaDiNg'))
+    def test_is_protected_over_ratio(self):
+        self.assertTrue(is_protected_over_ratio(2, 1, "a", "a,b,c"))
+        self.assertFalse(is_protected_over_ratio(0.5, 1, "a", "a,b,c"))
+        self.assertFalse(is_protected_over_ratio(2, 1, "z", "a,b,c"))
 
-    def test_isprotectedunderratio_sanity(self):
-        self.assertTrue(is_protected_under_ratio(0.5,1,'a','a,b,c'))
+    def test_is_not_protected_tor(self):
+        self.assertTrue(is_not_protected_tor("a", "a,b,c"))
+        self.assertFalse(is_not_protected_tor("z", "a,b,c"))
 
-    def test_isprotectedunderratio(self):
-        pass
+    def test_is_ignored_tag(self):
+        self.assertTrue(is_ignored_tag(["save"], "save,public,ipt"))
+        self.assertFalse(is_ignored_tag(["save"], "public,ipt"))
 
-    def test_isoldtor_sanity(self):
-        self.assertFalse(is_old_tor(1,2))
+    def test_is_ignored_tag_matches_substrings_not_tags(self):
+        """KNOWN BUG: matching is substring-based, so a short tag matches any
+        longer tag that contains it. 'ipt' matches 'iptorrents' and 'save'
+        matches 'unsaved', which silently ignores unrelated torrents.
+        """
+        self.assertTrue(is_ignored_tag(["ipt"], "iptorrents"))
+        self.assertTrue(is_ignored_tag(["save"], "unsaved"))
 
-    def test_isoldtor(self):
-        self.assertTrue(is_old_tor(1,1))
-        self.assertTrue(is_old_tor(2,1))
-        self.assertFalse(is_old_tor(1,2))
 
-    def test_isprotectedoverratio_sanity(self):
-        self.assertTrue(is_protected_over_ratio(2,1,'a','a,b,c'))
+class TestSendPing(unittest.TestCase):
+    def test_send_ping_requests_the_url(self):
+        req = RecordingRequests()
+        send_ping(FakeQbt(), req, "https://example.com/ping/x")
+        self.assertEqual(req.calls, ["https://example.com/ping/x"])
 
-    def test_isprotectedoverratio(self):
-        pass
+    def test_send_ping_uses_a_five_second_timeout(self):
+        req = RecordingRequests()
+        send_ping(FakeQbt(), req, "https://example.com/ping/x")
+        self.assertEqual(req.timeouts, [5])
 
-    def test_isnonprotectedtor_sanity(self):
-        self.assertTrue(is_not_protected_tor('a','a,b,c'))
 
-    def test_isnonprotectedtor(self):
-        pass
+# --- notification formatting -----------------------------------------------
 
-    def test_isignoredtag_sanity(self):
-        self.assertTrue(is_ignored_tag(['a','b','c'], 'first,second,third,a'))
-    
-    def test_isignoredtag(self):
-        self.assertTrue(is_ignored_tag(['save'], 'save,public,ipt'))
-
-    def test_sendpingstart_sanity(self):
-        send_ping(self, r, "https://thunder.jonb.io/ping/921625e5-5b76-4f45-a0c3-56145e16f3bb" + "/start")
-        url = "https://thunder.jonb.io/ping/921625e5-5b76-4f45-a0c3-56145e16f3bb"
-        send_ping(self, r, url)
-
-    def test_sendping_start(self):
-        url = "https://thunder.jonb.io/ping/921625e5-5b76-4f45-a0c3-56145e16f3bb/"
-        send_ping(self, r, url.strip("/") + "/start")
-        send_ping(self, r, "https://thunder.jonb.io/ping/921625e5-5b76-4f45-a0c3-56145e16f3bb")
-        
-
-    # --- notification formatting -------------------------------------------
-
+class TestFormatRuntime(unittest.TestCase):
     def test_format_runtime(self):
         self.assertEqual(format_runtime(datetime.timedelta(seconds=0)), "0s")
         self.assertEqual(format_runtime(datetime.timedelta(seconds=12)), "12s")
@@ -169,6 +144,8 @@ class TestQbitmaid(unittest.TestCase):
         self.assertEqual(format_runtime(datetime.timedelta(seconds=3723)), "1h 02m 03s")
         self.assertEqual(format_runtime(datetime.timedelta(seconds=-5)), "0s")
 
+
+class TestSummaryStats(unittest.TestCase):
     def test_summary_stats(self):
         stats = summary_stats(FakeQbt())
         self.assertEqual(stats["total"], 42)
@@ -189,6 +166,8 @@ class TestQbitmaid(unittest.TestCase):
         self.assertEqual(stats["removed"], 0)
         self.assertEqual(stats["runtime"], "unknown")
 
+
+class TestBuildSummary(unittest.TestCase):
     def test_build_summary_plain(self):
         title, body = build_summary(FakeQbt(), style="plain", use_emoji=False)
         self.assertEqual(title, "qbit-maid: 7 torrents removed")
@@ -295,10 +274,16 @@ class TestQbitmaid(unittest.TestCase):
         _, body = build_summary(FakeQbt(), include_hostname=True)
         self.assertTrue(body.startswith("Host: "))
 
+    def test_build_summary_hostname_html(self):
+        _, body = build_summary(FakeQbt(), style="html", include_hostname=True)
+        self.assertTrue(body.startswith("<b>Host:</b> "))
+
     def test_build_summary_unknown_style_falls_back(self):
         _, body = build_summary(FakeQbt(), style="markdown")
         self.assertNotIn("<b>", body)
 
+
+class TestNotifyOptions(unittest.TestCase):
     def test_get_notify_options_defaults(self):
         opts = get_notify_options(FakeQbt())
         self.assertEqual(opts["style"], "plain")
@@ -337,6 +322,8 @@ class TestQbitmaid(unittest.TestCase):
         fake = FakeQbt(config={"pushover": {"format": "bogus"}})
         self.assertEqual(get_notify_options(fake)["style"], "plain")
 
+
+class TestTorNotifySummary(unittest.TestCase):
     def test_tor_notify_summary_plain_payload(self):
         fake = FakeQbt()
         tor_notify_summary(fake)
@@ -387,6 +374,8 @@ class TestQbitmaid(unittest.TestCase):
         fake.poc = FailingPushover()
         tor_notify_summary(fake)  # must not raise
 
+
+class TestTorNotifyApprise(unittest.TestCase):
     def test_tor_notify_apprise_uses_plain_body(self):
         captured = {}
 
@@ -410,11 +399,6 @@ class TestQbitmaid(unittest.TestCase):
         self.assertEqual(fake.poc.calls[0]["body"], captured["body"])
         self.assertEqual(fake.poc.calls[0]["kwargs"]["title"], captured["title"])
 
-    # def test__sanity(self):
-    #     pass
 
-    # def test_(self):
-    #     pass
-        
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
