@@ -1,0 +1,18 @@
+[run]
+source = .
+branch = False
+omit =
+    pushover.py
+    test_*.py
+    qbt_fakes.py
+    */venv/*
+    /tmp/*
+
+[report]
+# Entry-point guards are not reachable from a test process; they are covered
+# by the container smoke test instead.
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:
+show_missing = True
+skip_covered = False

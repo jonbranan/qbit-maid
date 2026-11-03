@@ -1,41 +1,50 @@
-from qprocess import write_csv
+"""Tests for qprocess.write_csv — header-once, append semantics."""
 import csv
-import unittest
 import os
-# Torrent Items needed for testing
-# canidate['state'] {canidate["ratio"]} {torrent["tags"]} torrent["seeding_time"] {torrent["category"]} {torrent["name"][0:20]} {canidate["time_active"]}
+import shutil
+import tempfile
+import unittest
+
+from qprocess import write_csv
+
+HEADER = ["state", "ratio", "tags", "added", "hash", "name", "tracker"]
+ROW = ["downloading", 1.05, "ipt", 1, "asfasdf23412adfqwer",
+       "thisismynamehahahah", "https://localhost.stackoverflow.tech/announce"]
+
+
 class TestWriteCSV(unittest.TestCase):
-    def test_write_csv_dragnet(self):
-        self.cv = csv
-        outfile = './test_dragnet_outfile.csv'
-        state = 'downloading'
-        ratio = 1.05
-        tags = 'ipt'
-        added = 1
-        age = 240000
-        time = 123456
-        thash = 'asfasdf23412adfqwer'
-        tname = 'thisismynamehahahah'
-        trname = 'https://localhost.stackoverflow.tech/317332f1c125bc9c1b9b14fb8e054908/announce'
-        header = ['state','ratio','tags','added','age','time','thash','tname','trname']
-        row = [state,ratio,tags,added,age,time,thash,tname,trname]
-        write_csv(self.cv,outfile,header,row)
-        self.assertTrue(os.path.exists(outfile))
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.outfile = os.path.join(self.tmp, "out.csv")
 
-    def test_write_csv_telemetry(self):
-        self.cv = csv
-        outfile = './test_telemetry_outfile.csv'
-        state = 'downloading'
-        ratio = 1.05
-        tags = 'ipt'
-        added = 1
-        thash = 'asfasdf23412adfqwer'
-        tname = 'thisismynamehahahah'
-        trname = 'https://localhost.stackoverflow.tech/317332f1c125bc9c1b9b14fb8e054908/announce'
-        header = ['state','ratio','tags','added','hash','name','tracker']
-        row = [state,ratio,tags,added,thash,tname,trname]
-        write_csv(self.cv,outfile,header,row)
-        self.assertTrue(os.path.exists(outfile))
+    def read_rows(self):
+        with open(self.outfile, newline="", encoding="UTF8") as fh:
+            return list(csv.reader(fh))
 
-if __name__ == '__main__':
+    def test_writes_header_then_row(self):
+        write_csv(csv, self.outfile, HEADER, ROW)
+        rows = self.read_rows()
+        self.assertEqual(rows[0], HEADER)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[1][4], "asfasdf23412adfqwer")
+
+    def test_header_is_written_only_once(self):
+        write_csv(csv, self.outfile, HEADER, ROW)
+        write_csv(csv, self.outfile, HEADER, ROW)
+        rows = self.read_rows()
+        self.assertEqual(rows.count(HEADER), 1)
+        self.assertEqual(len(rows), 3)
+
+    def test_creates_the_file_when_missing(self):
+        self.assertFalse(os.path.exists(self.outfile))
+        write_csv(csv, self.outfile, HEADER, ROW)
+        self.assertTrue(os.path.exists(self.outfile))
+
+    def test_values_are_round_tripped(self):
+        write_csv(csv, self.outfile, HEADER, ROW)
+        self.assertEqual(self.read_rows()[1], [str(value) for value in ROW])
+
+
+if __name__ == "__main__":
     unittest.main()

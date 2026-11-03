@@ -8,6 +8,26 @@ on:
   pull_request:
 
 jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install dependencies
+        # Mirrors the Dockerfile: the container installs qbittorrent-api
+        # unpinned, so requirements.txt is not used here.
+        # --break-system-packages: the runner image ships a Debian-packaged
+        # pip, so a plain install (or `pip install --upgrade pip`) fails
+        # with "RECORD file not found".
+        run: |
+          python3 -m pip install --break-system-packages requests qbittorrent-api coverage
+      - name: Run the full suite with coverage
+        run: |
+          python3 -m coverage run --rcfile=.coveragerc -m unittest \
+            test_qbitmaid test_write_csv test_qlist test_qprocess \
+            test_qlogging_extra test_apprise test_qbt
+          python3 -m coverage report -m --fail-under=100
+
   komodo-deploy-script:
     runs-on: ubuntu-latest
     steps:
