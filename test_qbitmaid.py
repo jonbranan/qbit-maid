@@ -190,19 +190,28 @@ class TestQbitmaid(unittest.TestCase):
         self.assertEqual(stats["runtime"], "unknown")
 
     def test_build_summary_plain(self):
-        title, body = build_summary(FakeQbt(), style="plain")
+        title, body = build_summary(FakeQbt(), style="plain", use_emoji=False)
         self.assertEqual(title, "qbit-maid: 7 torrents removed")
         self.assertEqual(
             body,
             "Scanned 42 torrents in 12s\n"
             "\n"
-            "Removed          7\n"
-            "Orphaned         4\n"
-            "Ignored          5\n"
-            "Premature        3\n"
+            "7 removed  \u00b7  4 orphaned\n"
+            "5 ignored  \u00b7  3 premature\n"
             "\n"
-            "Protected       10\n"
-            "Non-protected   20",
+            "10 protected  \u00b7  20 public",
+        )
+
+    def test_build_summary_plain_emoji(self):
+        _, body = build_summary(FakeQbt(), style="plain", use_emoji=True)
+        self.assertEqual(
+            body,
+            "Scanned 42 torrents in 12s\n"
+            "\n"
+            "\U0001F5D1\uFE0F 7 removed  \u00b7  \U0001F47B 4 orphaned\n"
+            "\u23ED\uFE0F 5 ignored  \u00b7  \U0001F423 3 premature\n"
+            "\n"
+            "\U0001F6E1\uFE0F 10 protected  \u00b7  \U0001F310 20 public",
         )
 
     def test_build_summary_plain_has_no_leading_indent(self):
@@ -210,26 +219,65 @@ class TestQbitmaid(unittest.TestCase):
         for line in body.splitlines():
             self.assertFalse(line.startswith(" "), f"unexpected indent: {line!r}")
 
+    def test_build_summary_has_no_space_padding(self):
+        """Pushover uses a proportional font, so padded columns never align."""
+        for style in ("plain", "html"):
+            for emoji in (False, True):
+                _, body = build_summary(FakeQbt(), style=style, use_emoji=emoji)
+                for line in body.splitlines():
+                    stripped = line.replace("  \u00b7  ", "")
+                    self.assertNotIn("   ", stripped,
+                                     f"padded column in {style}/{emoji}: {line!r}")
+
+    def test_build_summary_groups_two_counters_per_line(self):
+        _, body = build_summary(FakeQbt(), style="plain")
+        rows = [ln for ln in body.splitlines() if "\u00b7" in ln]
+        self.assertEqual(len(rows), 3)
+        for row in rows:
+            self.assertEqual(row.count("\u00b7"), 1, row)
+
+    def test_build_summary_value_leads_label(self):
+        """The number comes first so it is the first thing the eye lands on."""
+        _, body = build_summary(FakeQbt(), style="plain", use_emoji=False)
+        self.assertIn("7 removed", body)
+        self.assertIn("20 public", body)
+        self.assertNotIn("Removed 7", body)
+        self.assertNotIn("Non-protected", body)
+
     def test_build_summary_html(self):
         title, body = build_summary(FakeQbt(), style="html")
         self.assertEqual(title, "qbit-maid: 7 torrents removed")
         self.assertIn("Scanned <b>42</b> torrents in <b>12s</b>", body)
-        self.assertIn("<b>Removed</b>", body)
-        self.assertIn("<b>Non-protected</b>", body)
+        self.assertIn("<b>7</b> removed", body)
+        self.assertIn("<b>20</b> public", body)
         self.assertNotIn("---", title)
 
     def test_build_summary_emoji(self):
         _, plain = build_summary(FakeQbt(), style="plain", use_emoji=True)
-        self.assertIn("\U0001F5D1\uFE0F Removed: 7", plain)
-        self.assertIn("\U0001F47B Orphaned: 4", plain)
+        self.assertIn("\U0001F5D1\uFE0F 7 removed", plain)
+        self.assertIn("\U0001F47B 4 orphaned", plain)
         _, html = build_summary(FakeQbt(), style="html", use_emoji=True)
-        self.assertIn("\U0001F5D1\uFE0F <b>Removed</b>: 7", html)
+        self.assertIn("\U0001F5D1\uFE0F <b>7</b> removed", html)
+
+    def test_build_summary_emoji_off_has_no_emoji(self):
+        _, body = build_summary(FakeQbt(), style="plain", use_emoji=False)
+        for marker in ("\U0001F5D1", "\U0001F47B", "\u23ED", "\U0001F423",
+                       "\U0001F6E1", "\U0001F310"):
+            self.assertNotIn(marker, body)
 
     def test_build_summary_delete_disabled(self):
         title, body = build_summary(FakeQbt(delete_torrents=False))
         self.assertEqual(title, "qbit-maid: 7 torrents would be removed")
-        self.assertIn("Would remove", body)
-        self.assertNotIn("Removed", body)
+        self.assertIn("7 would be removed", body)
+        self.assertNotIn("7 removed", body)
+
+    def test_build_summary_body_does_not_repeat_title_phrase(self):
+        """The title carries the outcome; the body must not restate it verbatim."""
+        title, body = build_summary(FakeQbt(), style="plain", use_emoji=False)
+        self.assertNotIn("torrents removed", body)
+        self.assertNotIn("torrents would be removed", body)
+        self.assertIn("7 removed", body)
+        self.assertTrue(title.endswith("7 torrents removed"))
 
     def test_build_summary_nothing_to_do(self):
         title, _ = build_summary(FakeQbt(torrent_hash_delete_list=[], up_tor_counter=0))
@@ -254,16 +302,20 @@ class TestQbitmaid(unittest.TestCase):
     def test_get_notify_options_defaults(self):
         opts = get_notify_options(FakeQbt())
         self.assertEqual(opts["style"], "plain")
-        self.assertFalse(opts["use_emoji"])
+        self.assertTrue(opts["use_emoji"])
         self.assertFalse(opts["include_hostname"])
         self.assertTrue(opts["notify_on_empty"])
         self.assertIsNone(opts["priority"])
         self.assertIsNone(opts["sound"])
 
+    def test_get_notify_options_emoji_can_be_disabled(self):
+        opts = get_notify_options(FakeQbt(config={"pushover": {"use_emoji": False}}))
+        self.assertFalse(opts["use_emoji"])
+
     def test_get_notify_options_overrides(self):
         fake = FakeQbt(config={"pushover": {
             "format": "HTML",
-            "use_emoji": True,
+            "use_emoji": False,
             "include_hostname": True,
             "notify_on_empty": False,
             "priority": 2,
@@ -273,7 +325,7 @@ class TestQbitmaid(unittest.TestCase):
         }})
         opts = get_notify_options(fake)
         self.assertEqual(opts["style"], "html")
-        self.assertTrue(opts["use_emoji"])
+        self.assertFalse(opts["use_emoji"])
         self.assertTrue(opts["include_hostname"])
         self.assertFalse(opts["notify_on_empty"])
         self.assertEqual(opts["priority"], 2)

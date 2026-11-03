@@ -26,9 +26,12 @@ use_pushover = false
 po_key = "<key>"
 po_token = "<token>"
 # Notification formatting
-# format: "plain" (aligned text) or "html" (bold labels, Pushover HTML)
+# format: "plain" (grouped text) or "html" (bold values, Pushover HTML)
+# Counters render as "emoji value label", grouped two per line and joined
+# with a middle dot, because Pushover uses a proportional font and padded
+# columns do not align.
 format = "plain"
-use_emoji = false
+use_emoji = true
 include_hostname = false
 notify_on_empty = true
 # Optional: -2..2. Priority 2 also needs retry/expire (defaults shown).
