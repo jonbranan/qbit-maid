@@ -77,9 +77,30 @@ def tor_notify_summary(self):
     except Exception as e:  # never let a notification failure abort a run
         logger.error(f"Failed to send pushover notification: {e}")
 
+def tor_notify_error(self, error, title="qbit-maid API ERROR"):
+    """Report an error through pushover when it is configured.
+
+    The vendored ``pushover`` module only exposes the ``Pushover`` class, so the
+    message has to go through the client built by :func:`tor_notify`.
+    """
+    logger = _logger(self)
+    logger.error(f"{title}: {error}")
+    if not getattr(self, "use_pushover", False):
+        return
+    client = getattr(self, "poc", None)
+    if client is None:
+        return
+    try:
+        client.message(self.po_key, str(error), title=title)
+    except Exception as exc:  # never let a notification failure abort a run
+        logger.error(f"Failed to send pushover error notification: {exc}")
+
 def list_first_tor(self, index=0):
     """Only lists the first torrent"""
     self.tl.debug('First torrent in the list:')
+    if not self.torrent_list:
+        self.tl.debug('No torrents found.')
+        return
     torrent = self.torrent_list[index]
     for k,v in torrent.items():
          self.tl.debug(f'{k}:  {v}')
@@ -337,6 +358,7 @@ def setup_logging(use_log: bool, log_path: str, log_level: str,
     # Make setup idempotent: clear any handlers from a previous call
     for handler in list(logger.handlers):
         logger.removeHandler(handler)
+        handler.close()
 
     if not use_log:
         logger.addHandler(logging.NullHandler())

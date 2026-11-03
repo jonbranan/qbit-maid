@@ -143,8 +143,6 @@ class TestAppriseClientConfig(unittest.TestCase):
         return config_path
 
     def test_toml_path_is_read_when_docker_is_set(self):
-        # The DOCKER branch reads five env vars before toml_path is reached, so
-        # all of them must be present for the toml_path branch to run at all.
         os.environ.update({
             "DOCKER": "1",
             "host": "env-host",
@@ -158,15 +156,12 @@ class TestAppriseClientConfig(unittest.TestCase):
         self.assertEqual(self.captured["host"], "toml-host")
         self.assertEqual(self.captured["port"], 4321)
 
-    def test_toml_path_is_ignored_without_docker(self):
-        """KNOWN BUG: the bare ``except`` swallows the DOCKER KeyError and
-        skips the rest of the try block, so ``toml_path`` is never read unless
-        ``DOCKER`` is also set. With no ./config.toml either, the client then
-        crashes on the missing ``host`` attribute.
-        """
+    def test_toml_path_is_read_without_docker(self):
         os.environ["toml_path"] = self._write_elsewhere_config()
-        with self.assertRaises(AttributeError):
-            AppriseClient()
+        AppriseClient()
+        self.assertEqual(self.captured["host"], "toml-host")
+        self.assertEqual(self.captured["port"], 4321)
+        self.assertEqual(self.captured["title"], "Toml Title")
 
 
 if __name__ == "__main__":
