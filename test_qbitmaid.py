@@ -196,13 +196,10 @@ class TestQbitmaid(unittest.TestCase):
             body,
             "Scanned 42 torrents in 12s\n"
             "\n"
-            "Removed          7\n"
-            "Orphaned         4\n"
-            "Ignored          5\n"
-            "Premature        3\n"
+            "Removed 7  \u00b7  Orphaned 4\n"
+            "Ignored 5  \u00b7  Premature 3\n"
             "\n"
-            "Protected       10\n"
-            "Non-protected   20",
+            "Protected 10  \u00b7  Non-protected 20",
         )
 
     def test_build_summary_plain_has_no_leading_indent(self):
@@ -210,26 +207,51 @@ class TestQbitmaid(unittest.TestCase):
         for line in body.splitlines():
             self.assertFalse(line.startswith(" "), f"unexpected indent: {line!r}")
 
+    def test_build_summary_has_no_space_padding(self):
+        """Pushover uses a proportional font, so padded columns never align."""
+        for style in ("plain", "html"):
+            for emoji in (False, True):
+                _, body = build_summary(FakeQbt(), style=style, use_emoji=emoji)
+                for line in body.splitlines():
+                    stripped = line.replace("  \u00b7  ", "")
+                    self.assertNotIn("   ", stripped,
+                                     f"padded column in {style}/{emoji}: {line!r}")
+
+    def test_build_summary_groups_two_counters_per_line(self):
+        _, body = build_summary(FakeQbt(), style="plain")
+        rows = [ln for ln in body.splitlines() if "\u00b7" in ln]
+        self.assertEqual(len(rows), 3)
+        for row in rows:
+            self.assertEqual(row.count("\u00b7"), 1, row)
+
     def test_build_summary_html(self):
         title, body = build_summary(FakeQbt(), style="html")
         self.assertEqual(title, "qbit-maid: 7 torrents removed")
         self.assertIn("Scanned <b>42</b> torrents in <b>12s</b>", body)
-        self.assertIn("<b>Removed</b>", body)
-        self.assertIn("<b>Non-protected</b>", body)
+        self.assertIn("<b>Removed</b> 7", body)
+        self.assertIn("<b>Non-protected</b> 20", body)
         self.assertNotIn("---", title)
 
     def test_build_summary_emoji(self):
         _, plain = build_summary(FakeQbt(), style="plain", use_emoji=True)
-        self.assertIn("\U0001F5D1\uFE0F Removed: 7", plain)
-        self.assertIn("\U0001F47B Orphaned: 4", plain)
+        self.assertIn("\U0001F5D1\uFE0F Removed 7", plain)
+        self.assertIn("\U0001F47B Orphaned 4", plain)
         _, html = build_summary(FakeQbt(), style="html", use_emoji=True)
-        self.assertIn("\U0001F5D1\uFE0F <b>Removed</b>: 7", html)
+        self.assertIn("\U0001F5D1\uFE0F <b>Removed</b> 7", html)
 
     def test_build_summary_delete_disabled(self):
         title, body = build_summary(FakeQbt(delete_torrents=False))
         self.assertEqual(title, "qbit-maid: 7 torrents would be removed")
-        self.assertIn("Would remove", body)
+        self.assertIn("Would remove 7", body)
         self.assertNotIn("Removed", body)
+
+    def test_build_summary_does_not_repeat_title_in_body(self):
+        """The title already states the outcome; the body must not restate it."""
+        title, body = build_summary(FakeQbt(), style="plain")
+        self.assertNotIn("7 removed", body)
+        self.assertNotIn("torrents removed", body)
+        self.assertIn("Removed 7", body)
+        self.assertTrue(title.endswith("7 torrents removed"))
 
     def test_build_summary_nothing_to_do(self):
         title, _ = build_summary(FakeQbt(torrent_hash_delete_list=[], up_tor_counter=0))

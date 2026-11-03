@@ -108,8 +108,10 @@ def get_script_runtime(self):
 # ---------------------------------------------------------------------------
 NOTIFY_STYLES = ("plain", "html")
 DEFAULT_NOTIFY_STYLE = "plain"
-LABEL_WIDTH = 14
-VALUE_WIDTH = 4
+# Pushover renders the body in a proportional font, so space-padded columns
+# collapse into a ragged list. Rows are therefore joined with a visible
+# separator instead of being aligned with spaces.
+ROW_SEPARATOR = "  \u00b7  "
 
 NOTIFY_EMOJI = {
     "removed": "\U0001F5D1\uFE0F",
@@ -211,18 +213,26 @@ def debug_torrent_list(self):
     self.tl.debug(self.torrent_list)
 
 
-def _notify_row(label, value, style, use_emoji, key):
-    """Render one label/value line for the chosen style."""
-    emoji = NOTIFY_EMOJI.get(key, "") if use_emoji else ""
-    if use_emoji:
+def _stat_row(pairs, style, use_emoji):
+    """Render one line of ``Label value`` pairs joined by a middle dot.
+
+    Args:
+        pairs: Sequence of ``(emoji_key, label, value)`` tuples.
+        style: ``"plain"`` or ``"html"``.
+        use_emoji: Prefix each pair with its emoji marker.
+
+    Returns:
+        A single line of text, e.g. ``Removed 7  \u00b7  Orphaned 4``.
+    """
+    parts = []
+    for key, label, value in pairs:
+        emoji = NOTIFY_EMOJI.get(key, "") if use_emoji else ""
         prefix = f"{emoji} " if emoji else ""
         if style == "html":
-            return f"{prefix}<b>{label}</b>: {value}"
-        return f"{prefix}{label}: {value}"
-    if style == "html":
-        pad = " " * max(LABEL_WIDTH - len(label), 1)
-        return f"<b>{label}</b>{pad}{value:>{VALUE_WIDTH}}"
-    return f"{label:<{LABEL_WIDTH}}{value:>{VALUE_WIDTH}}"
+            parts.append(f"{prefix}<b>{label}</b> {value}")
+        else:
+            parts.append(f"{prefix}{label} {value}")
+    return ROW_SEPARATOR.join(parts)
 
 
 def build_summary(self, style=DEFAULT_NOTIFY_STYLE, use_emoji=False,
@@ -230,10 +240,12 @@ def build_summary(self, style=DEFAULT_NOTIFY_STYLE, use_emoji=False,
     """Build the ``(title, body)`` pair used by every notifier.
 
     Result-first layout: the title states what happened, the body gives the
-    scanned total, the actionable counters, then the tracker split.
+    scanned total, the actionable counters, then the tracker split. Counters
+    are grouped two-per-line and separated by a middle dot, because Pushover
+    renders a proportional font and space-padded columns do not line up.
 
     Args:
-        style: ``"plain"`` for aligned text, ``"html"`` for Pushover HTML.
+        style: ``"plain"`` for grouped text, ``"html"`` for Pushover HTML.
         use_emoji: Prefix each row with an emoji marker.
         include_hostname: Add a ``Host:`` line above the summary.
 
@@ -275,14 +287,19 @@ def build_summary(self, style=DEFAULT_NOTIFY_STYLE, use_emoji=False,
     lines.append("")
 
     removed_label = "Removed" if delete_enabled else "Would remove"
-    lines.append(_notify_row(removed_label, removed, style, use_emoji, "removed"))
-    lines.append(_notify_row("Orphaned", stats["orphaned"], style, use_emoji, "orphaned"))
-    lines.append(_notify_row("Ignored", stats["ignored"], style, use_emoji, "ignored"))
-    lines.append(_notify_row("Premature", stats["premature"], style, use_emoji, "premature"))
+    lines.append(_stat_row([
+        ("removed", removed_label, removed),
+        ("orphaned", "Orphaned", stats["orphaned"]),
+    ], style, use_emoji))
+    lines.append(_stat_row([
+        ("ignored", "Ignored", stats["ignored"]),
+        ("premature", "Premature", stats["premature"]),
+    ], style, use_emoji))
     lines.append("")
-    lines.append(_notify_row("Protected", stats["protected"], style, use_emoji, "protected"))
-    lines.append(_notify_row("Non-protected", stats["non_protected"], style,
-                             use_emoji, "non_protected"))
+    lines.append(_stat_row([
+        ("protected", "Protected", stats["protected"]),
+        ("non_protected", "Non-protected", stats["non_protected"]),
+    ], style, use_emoji))
 
     return title, "\n".join(lines)
 

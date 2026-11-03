@@ -137,34 +137,45 @@ Pushover and Apprise share one summary builder, so both report the same
 numbers. The title states the outcome, the body gives the scanned total, the
 actionable counters, then the tracker split.
 
-`format = "plain"` (default) produces aligned text:
+`format = "plain"` (default) produces a compact, grouped summary:
 
 ```
 qbit-maid: 7 torrents removed
 
 Scanned 42 torrents in 12s
 
-Removed          7
-Orphaned         4
-Ignored          5
-Premature        3
+Removed 7  ·  Orphaned 4
+Ignored 5  ·  Premature 3
 
-Protected       10
-Non-protected   20
+Protected 10  ·  Non-protected 20
 ```
 
-`format = "html"` bolds the labels and counts using Pushover's HTML subset
-(`html=1` is set automatically). Apprise has no HTML support, so it always
-receives the plain body.
+Counters are grouped two per line and joined with a middle dot rather than
+padded into columns. Pushover renders the body in a proportional font, so
+space-padded columns collapse into a ragged list on a phone — the separator
+survives any font.
 
-Setting `use_emoji = true` switches both styles to `emoji label: value` rows:
+`format = "html"` bolds the labels using Pushover's HTML subset (`html=1` is
+set automatically). Apprise has no HTML support, so it always receives the
+plain body.
+
+Setting `use_emoji = true` prefixes each counter with an emoji marker:
 
 ```
-🗑️ Removed: 7
-👻 Orphaned: 4
-⏭️ Ignored: 5
-🐣 Premature: 3
+🗑️ Removed 7  ·  👻 Orphaned 4
+⏭️ Ignored 5  ·  🐣 Premature 3
+
+🛡️ Protected 10  ·  🌐 Non-protected 20
 ```
+
+To preview the result without sending a push, render the real
+`build_summary()` output as a phone-width mockup:
+
+```
+python3 docs/notify-preview.py /tmp/notify.png
+```
+
+Pass `--mock` to render the design sketches instead of the live output.
 
 Other options:
 
