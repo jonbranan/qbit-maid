@@ -13,7 +13,13 @@ import types
 import unittest
 from unittest import mock
 
-from qbt_fakes import FakeAPIError, FakeQbtClient, StubPushover, torrent
+from qbt_fakes import (
+    FailingPushover,
+    FakeAPIError,
+    FakeQbtClient,
+    StubPushover,
+    torrent,
+)
 
 REPO = os.path.dirname(os.path.abspath(__file__))
 
@@ -200,13 +206,21 @@ class TestQbtPipeline(QbtTestCase):
         self.assertIsNotNone(qbt.et)
         self.assertGreaterEqual(qbt.et, qbt.st)
 
-    def test_empty_torrent_list_crashes(self):
-        """KNOWN BUG: list_first_tor() indexes torrent_list[0] unconditionally,
-        so a qBittorrent instance with zero torrents raises IndexError and the
-        whole run aborts before any summary is sent.
-        """
-        with self.assertRaises(IndexError):
-            self.build([])
+    def test_empty_torrent_list_is_handled(self):
+        """A qBittorrent instance with zero torrents must not abort the run."""
+        qbt, client = self.build([])
+        self.assertEqual(qbt.total_torrents, 0)
+        self.assertEqual(qbt.torrent_hash_delete_list, [])
+        self.assertEqual(client.deleted, [])
+
+    def test_empty_torrent_list_still_sends_a_summary(self):
+        stub = StubPushover()
+        with mock.patch.object(self.module.pushover, "Pushover",
+                               return_value=stub):
+            self.build([], use_pushover="true")
+        self.assertEqual(len(stub.calls), 1)
+        self.assertEqual(stub.calls[0]["kwargs"]["title"],
+                         "qbit-maid: nothing removed")
 
 
 class TestQbtConfigSources(QbtTestCase):
@@ -281,23 +295,32 @@ class TestQbtLoginFailure(QbtTestCase):
     def test_login_error_notifies_and_continues(self):
         client = FakeQbtClient(torrents=[torrent(tags="ipt")],
                                login_error=FakeAPIError("bad credentials"))
-        with mock.patch.object(self.module.pushover, "send_message",
-                               create=True) as send_message:
-            qbt, _ = self.build([torrent(tags="ipt")], client=client)
-        send_message.assert_called_once()
-        self.assertEqual(send_message.call_args.kwargs["title"],
+        stub = StubPushover()
+        with mock.patch.object(self.module.pushover, "Pushover",
+                               return_value=stub):
+            qbt, _ = self.build([torrent(tags="ipt")], client=client,
+                                use_pushover="true")
+        # The error notification goes out first, then the run summary.
+        self.assertEqual(len(stub.calls), 2)
+        self.assertEqual(stub.calls[0]["kwargs"]["title"],
                          "qbit-maid API ERROR")
+        self.assertIn("bad credentials", stub.calls[0]["body"])
         self.assertEqual(qbt.total_torrents, 1)
 
-    def test_login_error_crashes_without_a_send_message_helper(self):
-        """KNOWN BUG: the vendored pushover module has no module-level
-        ``send_message``, so the error path raises AttributeError instead of
-        notifying anyone.
-        """
+    def test_login_error_without_pushover_does_not_crash(self):
         client = FakeQbtClient(torrents=[torrent(tags="ipt")],
                                login_error=FakeAPIError("bad credentials"))
-        with self.assertRaises(AttributeError):
-            self.build([torrent(tags="ipt")], client=client)
+        qbt, _ = self.build([torrent(tags="ipt")], client=client)
+        self.assertEqual(qbt.total_torrents, 1)
+
+    def test_login_error_survives_a_failing_pushover(self):
+        client = FakeQbtClient(torrents=[torrent(tags="ipt")],
+                               login_error=FakeAPIError("bad credentials"))
+        with mock.patch.object(self.module.pushover, "Pushover",
+                               return_value=FailingPushover()):
+            qbt, _ = self.build([torrent(tags="ipt")], client=client,
+                                use_pushover="true")
+        self.assertEqual(qbt.total_torrents, 1)
 
 
 class TestMainGuard(QbtTestCase):
@@ -312,14 +335,15 @@ class TestMainGuard(QbtTestCase):
 
 
 class TestIgnoredTagsConfig(QbtTestCase):
-    def test_ignored_tags_reads_the_ignored_domains_section(self):
-        """KNOWN BUG: qbit-maid.py assigns ``ignored_tags`` from
-        ``config["ignored_domains"]``, so the ``[ignored_tags]`` section is
-        never read and tag-based ignoring silently does nothing.
-        """
+    def test_ignored_tags_reads_the_ignored_tags_section(self):
         qbt, _ = self.build([torrent(tags="ipt")])
-        self.assertEqual(qbt.ignored_tags, {"tracker-example": "tracker.example"})
-        self.assertNotIn("save", qbt.ignored_tags)
+        self.assertEqual(qbt.ignored_tags, {"save": "save"})
+        self.assertNotIn("tracker-example", qbt.ignored_tags)
+
+    def test_ignored_tag_from_config_is_skipped(self):
+        qbt, _ = self.build([torrent(tags="save", infohash="ignored-tag")])
+        self.assertEqual(qbt.ignored_counter, 1)
+        self.assertEqual(qbt.tracker_list, [])
 
 
 if __name__ == "__main__":

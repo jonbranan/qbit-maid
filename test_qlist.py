@@ -2,7 +2,28 @@
 import unittest
 
 from qbt_fakes import FakeQbt, torrent
-from qlist import build_tor_list
+from qlist import build_tor_list, torrent_tag_for
+
+
+class TestTorrentTagFor(unittest.TestCase):
+    def test_protected_tracker_gets_the_protected_tag(self):
+        self.assertEqual(
+            torrent_tag_for("https://tracker.example/a", "ipt", "public",
+                            ["tracker.example"]),
+            "ipt",
+        )
+
+    def test_unknown_tracker_gets_the_public_tag(self):
+        self.assertEqual(
+            torrent_tag_for("https://other.example/a", "ipt", "public",
+                            ["tracker.example"]),
+            "public",
+        )
+
+    def test_blank_tracker_gets_no_tag(self):
+        self.assertIsNone(
+            torrent_tag_for("", "ipt", "public", ["tracker.example"])
+        )
 
 
 class TestBuildTorList(unittest.TestCase):
@@ -36,6 +57,14 @@ class TestBuildTorList(unittest.TestCase):
         self.assertEqual(qbt.ignored_counter, 1)
         self.assertEqual(qbt.tracker_list, [])
 
+    def test_ignored_tag_does_not_match_a_longer_tag(self):
+        qbt = self.run_build(
+            [torrent(tags="iptorrents", tracker="https://other.example/a")],
+            ignored_tags={"ipt": "ipt"},
+        )
+        self.assertEqual(qbt.ignored_counter, 0)
+        self.assertEqual(len(qbt.tracker_list), 1)
+
     def test_blank_tag_on_protected_tracker_gets_protected_tag(self):
         qbt = self.run_build([torrent(tags="", infohash="h1")])
         self.assertIn(("ipt", "h1"), qbt.qbt_client.added_tags)
@@ -48,16 +77,10 @@ class TestBuildTorList(unittest.TestCase):
         self.assertIn(("public", "h2"), qbt.qbt_client.added_tags)
         self.assertEqual(len(qbt.tracker_list), 1)
 
-    def test_blank_tag_is_applied_twice_for_non_premature_torrents(self):
-        """KNOWN REDUNDANCY: the tagging block runs twice for the same torrent.
-
-        Lines 24-29 tag any blank-tag torrent; lines 34-43 tag it again inside
-        the tracker branch. qBittorrent treats the second call as a no-op, so
-        the outcome is correct but one API call per new torrent is wasted.
-        Pinned here so the duplication is visible rather than silent.
-        """
+    def test_blank_tag_is_applied_once_for_non_premature_torrents(self):
+        """A blank-tag torrent is tagged once, not once per code path."""
         qbt = self.run_build([torrent(tags="", infohash="h1")])
-        self.assertEqual(qbt.qbt_client.added_tags, [("ipt", "h1"), ("ipt", "h1")])
+        self.assertEqual(qbt.qbt_client.added_tags, [("ipt", "h1")])
 
     def test_premature_blank_tag_torrent_is_tagged_once(self):
         """Premature torrents are tagged by the first block, then skipped."""

@@ -89,7 +89,7 @@ class Qbt:
         self.tracker_whitelist = self.config["ignored_domains"]
 
         #ignored_tags
-        self.ignored_tags = self.config["ignored_domains"]
+        self.ignored_tags = self.config["ignored_tags"]
 
         #healthcheck
         self.use_healthcheck = self.config["healthcheck"]["use_healthcheck"]
@@ -117,7 +117,7 @@ class Qbt:
             self.tl.info('Connected.')
         except qbittorrentapi.APIError as e:
             self.tl.exception(e)
-            self.po.send_message(e, title="qbit-maid API ERROR")
+            tor_notify_error(self, e)
         # Pulling all torrent data
         self.torrent_list = self.qbt_client.torrents_info()
         #Main process block

@@ -22,24 +22,22 @@ def build_tor_list(self):
                 self.ignored_counter += 1
                 continue
             if is_tag_blank(torrent['tags']):
-                self.tl.debug(f'Tagging new torrent: ["{torrent["name"][0:20]}..."] {torrent["tracker"]}hash: {torrent["hash"]}')
-                if is_protected_tracker(torrent['tracker'], self.tracker_whitelist.values()):
-                    self.qbt_client.torrents_add_tags(self.tracker_protected_tag,torrent['hash'])
-                elif is_not_protected_tracker(torrent['tracker'], self.tracker_whitelist.values()):
-                    self.qbt_client.torrents_add_tags(self.tracker_non_protected_tag,torrent['hash'])
+                tag = torrent_tag_for(
+                    torrent['tracker'],
+                    self.tracker_protected_tag,
+                    self.tracker_non_protected_tag,
+                    self.tracker_whitelist.values(),
+                )
+                if tag:
+                    self.tl.debug(f'Tagging new torrent: ["{torrent["name"][0:20]}..."] {torrent["tracker"]}hash: {torrent["hash"]}')
+                    self.qbt_client.torrents_add_tags(tag, torrent['hash'])
             if is_preme(torrent['seeding_time'], self.min_age):
                 self.preme_tor_counter += 1
                 self.tl.debug(f'Premature torrent: ["{torrent["name"][0:20]}..."] Seconds Seeded: [{torrent["seeding_time"]}] hash: {torrent["hash"]}')
                 continue
             elif is_protected_tracker(torrent['tracker'], self.tracker_whitelist.values()):
-                if is_tag_blank(torrent['tags']):
-                    self.qbt_client.torrents_add_tags(self.tracker_protected_tag,torrent['hash'])
-                    self.tl.debug(f'Tagging Protected torrent: ["{torrent["name"][0:20]}..."] {torrent["tracker"]}hash: {torrent["hash"]}')
                 self.tracker_list.append(torrent)
             elif is_not_protected_tracker(torrent['tracker'], self.tracker_whitelist.values()):
-                if is_tag_blank(torrent['tags']):
-                    self.qbt_client.torrents_add_tags(self.tracker_non_protected_tag,torrent['hash'])
-                    self.tl.debug(f'Tagging Non-protected torrent: ["{torrent["name"][0:20]}..."] {torrent["tracker"]}hash: {torrent["hash"]}')
                 self.tracker_list.append(torrent)
 
 
@@ -67,11 +65,26 @@ def is_not_protected_tracker(tracker, trackerlist):
     if tracker.split('/')[2] not in trackerlist:
         return True
 
+def torrent_tag_for(tracker, protected_tag, non_protected_tag, trackerlist):
+    """Return the tag a torrent should carry, or None for an unknown tracker."""
+    if is_protected_tracker(tracker, trackerlist):
+        return protected_tag
+    if is_not_protected_tracker(tracker, trackerlist):
+        return non_protected_tag
+    return None
+
 def is_tag_blank(tag):
     if tag == '':
         return True
 
 def is_ignored_tag(igtags, tortags):
-    for igt in igtags:
-        if igt in tortags:
-            return True
+    """True when the torrent carries one of the configured ignored tags.
+
+    qBittorrent returns tags as a comma-separated string, so the comparison is
+    per tag: a configured ``ipt`` must not match a torrent tagged
+    ``iptorrents``.
+    """
+    if not tortags:
+        return False
+    torrent_tags = {tag.strip() for tag in str(tortags).split(',') if tag.strip()}
+    return any(igt in torrent_tags for igt in igtags)

@@ -113,13 +113,16 @@ class TestPredicates(unittest.TestCase):
         self.assertTrue(is_ignored_tag(["save"], "save,public,ipt"))
         self.assertFalse(is_ignored_tag(["save"], "public,ipt"))
 
-    def test_is_ignored_tag_matches_substrings_not_tags(self):
-        """KNOWN BUG: matching is substring-based, so a short tag matches any
-        longer tag that contains it. 'ipt' matches 'iptorrents' and 'save'
-        matches 'unsaved', which silently ignores unrelated torrents.
+    def test_is_ignored_tag_matches_whole_tags_only(self):
+        """A configured tag must match a whole tag, not a substring of one.
+
+        'ipt' must not match 'iptorrents' and 'save' must not match 'unsaved'.
         """
-        self.assertTrue(is_ignored_tag(["ipt"], "iptorrents"))
-        self.assertTrue(is_ignored_tag(["save"], "unsaved"))
+        self.assertFalse(is_ignored_tag(["ipt"], "iptorrents"))
+        self.assertFalse(is_ignored_tag(["save"], "unsaved"))
+        self.assertTrue(is_ignored_tag(["ipt"], "save,ipt"))
+        self.assertTrue(is_ignored_tag(["save"], " save , public"))
+        self.assertFalse(is_ignored_tag(["save"], ""))
 
 
 class TestSendPing(unittest.TestCase):

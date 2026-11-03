@@ -5,10 +5,9 @@ import os
 import shutil
 import tempfile
 import unittest
-import warnings
 from collections import Counter
 
-from qbt_fakes import FakeQbt, StubPushover, torrent
+from qbt_fakes import FailingPushover, FakeQbt, StubPushover, torrent
 from qlogging import (
     LOGGER_NAME,
     debug_torrent_list,
@@ -24,6 +23,7 @@ from qlogging import (
     summary_runtime,
     summary_stats,
     tor_notify,
+    tor_notify_error,
     tor_notify_summary,
     tornotifytest,
     torrent_count,
@@ -76,6 +76,35 @@ class TestNotifySetup(unittest.TestCase):
         self.assertEqual(qbt.poc.calls[0]["kwargs"]["title"], "qbit-maid")
 
 
+class TestTorNotifyError(unittest.TestCase):
+    def test_sends_through_the_pushover_client(self):
+        qbt = FakeQbt(use_pushover=True)
+        tor_notify_error(qbt, RuntimeError("boom"))
+        self.assertEqual(len(qbt.poc.calls), 1)
+        self.assertEqual(qbt.poc.calls[0]["user"], "USERKEY")
+        self.assertIn("boom", qbt.poc.calls[0]["body"])
+        self.assertEqual(qbt.poc.calls[0]["kwargs"]["title"],
+                         "qbit-maid API ERROR")
+
+    def test_skips_pushover_when_disabled(self):
+        qbt = FakeQbt(use_pushover=False)
+        tor_notify_error(qbt, RuntimeError("boom"))
+        self.assertEqual(qbt.poc.calls, [])
+
+    def test_skips_pushover_when_no_client_was_built(self):
+        qbt = FakeQbt(use_pushover=True, poc=None)
+        tor_notify_error(qbt, RuntimeError("boom"))  # must not raise
+
+    def test_survives_a_failing_pushover(self):
+        qbt = FakeQbt(use_pushover=True, poc=FailingPushover())
+        tor_notify_error(qbt, RuntimeError("boom"))  # must not raise
+
+    def test_accepts_a_custom_title(self):
+        qbt = FakeQbt(use_pushover=True)
+        tor_notify_error(qbt, RuntimeError("boom"), title="Custom")
+        self.assertEqual(qbt.poc.calls[0]["kwargs"]["title"], "Custom")
+
+
 class TestCounters(unittest.TestCase):
     def test_process_counts_buckets_by_tag(self):
         qbt = FakeQbt(
@@ -116,6 +145,12 @@ class TestDebugHelpers(unittest.TestCase):
         with self.assertLogs("qbit-maid-test", level="DEBUG") as captured:
             list_first_tor(qbt, index=1)
         self.assertIn("One", "\n".join(captured.output))
+
+    def test_list_first_tor_handles_an_empty_list(self):
+        qbt = FakeQbt(torrent_list=[])
+        with self.assertLogs("qbit-maid-test", level="DEBUG") as captured:
+            list_first_tor(qbt)
+        self.assertIn("No torrents found", "\n".join(captured.output))
 
     def test_list_qbit_api_info_logs_versions(self):
         qbt = FakeQbt()
@@ -233,14 +268,13 @@ class TestSetupLogging(unittest.TestCase):
         self.assertEqual(logger.level, logging.INFO)
 
     def test_setup_is_idempotent(self):
-        setup_logging(True, self.log_path, "INFO")
-        # setup_logging drops the previous handlers without closing them, so a
-        # second call leaks the old file descriptor. Known issue; silenced here
-        # so the suite output stays readable.
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", ResourceWarning)
-            logger = setup_logging(True, self.log_path, "INFO")
+        first = setup_logging(True, self.log_path, "INFO")
+        previous_file_handler = first.handlers[0]
+        self.assertIsNotNone(previous_file_handler.stream)
+        logger = setup_logging(True, self.log_path, "INFO")
         self.assertEqual(len(logger.handlers), 2)
+        # The replaced handler is closed, so its file descriptor is released.
+        self.assertIsNone(previous_file_handler.stream)
 
     def test_rotation_parameters_are_applied(self):
         logger = setup_logging(True, self.log_path, "INFO",
